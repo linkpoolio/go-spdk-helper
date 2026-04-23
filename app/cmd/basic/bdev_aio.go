@@ -42,6 +42,10 @@ func BdevAioCreateCmd() cli.Command {
 				Usage: "The block size in bytes. By default 4096",
 				Value: 4096,
 			},
+			cli.BoolFlag{
+				Name:  "nowait",
+				Usage: "Enable RWF_NOWAIT on iocb read/write submissions (block devices only)",
+			},
 		},
 		Action: func(c *cli.Context) {
 			if err := bdevAioCreate(c); err != nil {
@@ -57,7 +61,7 @@ func bdevAioCreate(c *cli.Context) error {
 		return err
 	}
 
-	bdevName, err := spdkCli.BdevAioCreate(c.String("file-path"), c.String("bdev-name"), c.Uint64("block-size"))
+	bdevName, err := spdkCli.BdevAioCreate(c.String("file-path"), c.String("bdev-name"), c.Uint64("block-size"), c.Bool("nowait"))
 	if err != nil {
 		return err
 	}
