@@ -55,6 +55,10 @@ func BdevRaidCreateCmd() cli.Command {
 				Usage:    "User defined raid bdev uuid, optional",
 				Required: false,
 			},
+			cli.BoolFlag{
+				Name:  "delta-bitmap,d",
+				Usage: "Enable per-base-bdev dirty-region tracking on raid1 for incremental rebuild. Ignored for non-raid1 levels.",
+			},
 		},
 		Action: func(c *cli.Context) {
 			if err := bdevRaidCreate(c); err != nil {
@@ -70,7 +74,7 @@ func bdevRaidCreate(c *cli.Context) error {
 		return err
 	}
 
-	created, err := spdkCli.BdevRaidCreate(c.String("name"), spdktypes.BdevRaidLevel(c.String("level")), uint32(c.Uint64("strip-size-kb")), c.StringSlice("base-bdevs"), c.String("uuid"))
+	created, err := spdkCli.BdevRaidCreate(c.String("name"), spdktypes.BdevRaidLevel(c.String("level")), uint32(c.Uint64("strip-size-kb")), c.StringSlice("base-bdevs"), c.String("uuid"), c.Bool("delta-bitmap"))
 	if err != nil {
 		return err
 	}
