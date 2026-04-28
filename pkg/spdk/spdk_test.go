@@ -276,7 +276,7 @@ func (s *TestSuite) TestSPDKBasic(c *C) {
 		c.Assert(err, IsNil)
 		c.Assert(deleted, Equals, true)
 	}()
-	operationId, err := spdkCli.BdevLvolStartShallowCopy(snapLvolUUID3, lvolUUID4)
+	operationId, err := spdkCli.BdevLvolStartShallowCopy(snapLvolUUID3, lvolUUID4, 0)
 	c.Assert(err, IsNil)
 	c.Assert(operationId, Not(Equals), 0)
 	var start time.Time

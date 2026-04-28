@@ -497,6 +497,10 @@ func BdevLvolStartShallowCopyCmd() cli.Command {
 				Usage:    "Name of the bdev that acts as destination for the copy",
 				Required: true,
 			},
+			cli.UintFlag{
+				Name:  "pipeline-depth",
+				Usage: "Maximum number of clusters in flight on the source side (0 = default 1, no pipelining)",
+			},
 		},
 		Usage: "start a copy of active clusters/data from a read-only logical volume to a bdev: \"shallow-copy-start --src-lvol-alias <LVSTORE NAME>/<LVOL NAME> --dst-bdev-name <BDEV NAME>\", or \"shallow-copy --uuid <LVOL UUID> --dst-bdev-name <BDEV NAME>\"",
 		Action: func(c *cli.Context) {
@@ -518,7 +522,7 @@ func bdevLvolStartShallowCopy(c *cli.Context) error {
 		srcLvolName = c.String("src-lvol-uuid")
 	}
 
-	operationId, err := spdkCli.BdevLvolStartShallowCopy(srcLvolName, c.String("dst-bdev-name"))
+	operationId, err := spdkCli.BdevLvolStartShallowCopy(srcLvolName, c.String("dst-bdev-name"), uint32(c.Uint("pipeline-depth")))
 	if err != nil {
 		return err
 	}
@@ -546,6 +550,10 @@ func BdevLvolStartRangeShallowCopyCmd() cli.Command {
 			cli.Int64SliceFlag{
 				Name:  "cluster",
 				Usage: "Cluster index to copy/unmap",
+			},
+			cli.UintFlag{
+				Name:  "pipeline-depth",
+				Usage: "Maximum number of clusters in flight on the source side (0 = default 1, no pipelining)",
 			},
 		},
 		Usage: "start a synchronization of clusters in the list from a read-only logical volume to a bdev, copying data of allocated clusters or unmapping data of unallocated clusters:" +
@@ -576,7 +584,7 @@ func bdevLvolStartRangeShallowCopy(c *cli.Context) error {
 		clusters = append(clusters, uint64(s))
 	}
 
-	operationId, err := spdkCli.BdevLvolStartRangeShallowCopy(srcLvolName, c.String("dst-bdev-name"), clusters)
+	operationId, err := spdkCli.BdevLvolStartRangeShallowCopy(srcLvolName, c.String("dst-bdev-name"), clusters, uint32(c.Uint("pipeline-depth")))
 	if err != nil {
 		return err
 	}
