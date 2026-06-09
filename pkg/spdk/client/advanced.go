@@ -87,6 +87,12 @@ func (c *Client) StartExposeBdev(nqn, bdevName, nguid, ip, port string) error {
 	return c.StartExposeBdevWithTransport(nqn, bdevName, nguid, ip, port, spdktypes.NvmeTransportTypeTCP)
 }
 
+// StartExposeBdevWithTransport exposes a bdev on the given transport ("tcp"
+// or "rdma"). Selecting RDMA requires the SPDK target process to have been
+// started with `--rdma` or equivalent transport support; the call will fail
+// if nvmf_create_transport rejects the type.
+//
+// Empty transport defaults to TCP for backward compat.
 func (c *Client) StartExposeBdevWithTransport(nqn, bdevName, nguid, ip, port string, transport spdktypes.NvmeTransportType) error {
 	if transport == "" {
 		transport = spdktypes.NvmeTransportTypeTCP
@@ -161,6 +167,11 @@ func (c *Client) StartExposeBdevWithANAState(nqn, bdevName, nguid, nsUUID, ip, p
 	return c.StartExposeBdevWithANAStateAndTransport(nqn, bdevName, nguid, nsUUID, ip, port, spdktypes.NvmeTransportTypeTCP, anaState, minCntlid, maxCntlid)
 }
 
+// StartExposeBdevWithANAStateAndTransport is the transport-aware variant of
+// StartExposeBdevWithANAState. See that function for a description of the
+// nsUUID / cntlid parameters. RDMA requires the SPDK target process to have
+// transport support compiled in and configured. An empty transport defaults
+// to TCP.
 func (c *Client) StartExposeBdevWithANAStateAndTransport(nqn, bdevName, nguid, nsUUID, ip, port string, transport spdktypes.NvmeTransportType, anaState spdktypes.NvmfSubsystemListenerAnaState, minCntlid, maxCntlid uint16) error {
 	if transport == "" {
 		transport = spdktypes.NvmeTransportTypeTCP

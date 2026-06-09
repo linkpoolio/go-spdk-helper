@@ -1220,7 +1220,12 @@ func (c *Client) NvmfCreateTransportWithOpts(req spdktypes.NvmfCreateTransportRe
 //  3. caller sends framework_start_init — spdk_tgt initialises subsystems
 //     with the tuned opts
 //
-// Without --wait-for-rpc this RPC is a no-op (subsystems are already up).
+// SPDK registers framework_start_init with the STARTUP state mask only, so
+// calling it on an already-initialized target (e.g. one started without
+// --wait-for-rpc, or a second invocation) returns a JSON-RPC error of the
+// "Method may only be called before framework is initialized" class rather
+// than succeeding as a no-op. Callers that need idempotency must tolerate
+// that error themselves (the longhorn-spdk-engine caller already does).
 func (c *Client) FrameworkStartInit() (result bool, err error) {
 	cmdOutput, err := c.jsonCli.SendCommand("framework_start_init", nil)
 	if err != nil {
