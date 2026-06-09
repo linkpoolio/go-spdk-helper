@@ -3,6 +3,7 @@ package client
 import (
 	"net"
 	"path/filepath"
+	"strings"
 
 	"github.com/sirupsen/logrus"
 
@@ -121,13 +122,23 @@ func (c *Client) EnsureNvmfTransport(transport spdktypes.NvmeTransportType) erro
 	return c.ensureNvmfTransport(transport)
 }
 
+// transportTypesEqual reports whether two NVMe-oF transport types refer to
+// the same transport. SPDK reports trtype uppercase ("TCP", "RDMA") in
+// nvmf_get_transports responses while this package's constants are lowercase
+// ("tcp", "rdma"), so the comparison must be case-insensitive.
+func transportTypesEqual(a, b spdktypes.NvmeTransportType) bool {
+	return strings.EqualFold(string(a), string(b))
+}
+
+// ensureNvmfTransport creates the requested NVMf transport in SPDK if it is
+// not already present. "Already exists" errors are swallowed (idempotent).
 func (c *Client) ensureNvmfTransport(transport spdktypes.NvmeTransportType) error {
 	existing, err := c.NvmfGetTransports("", "")
 	if err != nil {
 		return err
 	}
 	for _, t := range existing {
-		if t.Trtype == transport {
+		if transportTypesEqual(t.Trtype, transport) {
 			return nil
 		}
 	}
