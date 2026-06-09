@@ -2,6 +2,7 @@ package basic
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/sirupsen/logrus"
 	"github.com/urfave/cli"
@@ -44,7 +45,11 @@ func BdevAioCreateCmd() cli.Command {
 			},
 			cli.BoolFlag{
 				Name:  "nowait",
-				Usage: "Enable RWF_NOWAIT on iocb read/write submissions (block devices only)",
+				Usage: "Explicitly enable RWF_NOWAIT on iocb read/write submissions (block devices only)",
+			},
+			cli.BoolFlag{
+				Name:  "no-nowait",
+				Usage: "Explicitly disable RWF_NOWAIT. When neither --nowait nor --no-nowait is given, the SPDK built-in default applies",
 			},
 		},
 		Action: func(c *cli.Context) {
@@ -56,12 +61,27 @@ func BdevAioCreateCmd() cli.Command {
 }
 
 func bdevAioCreate(c *cli.Context) error {
+	if c.Bool("nowait") && c.Bool("no-nowait") {
+		return fmt.Errorf("--nowait and --no-nowait are mutually exclusive")
+	}
+
+	// nowait is tri-state: nil (neither flag) defers to the SPDK built-in
+	// default, --nowait sends an explicit true, --no-nowait an explicit false.
+	var nowait *bool
+	if c.Bool("nowait") {
+		v := true
+		nowait = &v
+	} else if c.Bool("no-nowait") {
+		v := false
+		nowait = &v
+	}
+
 	spdkCli, err := client.NewClient(context.Background())
 	if err != nil {
 		return err
 	}
 
-	bdevName, err := spdkCli.BdevAioCreate(c.String("file-path"), c.String("bdev-name"), c.Uint64("block-size"), c.Bool("nowait"))
+	bdevName, err := spdkCli.BdevAioCreate(c.String("file-path"), c.String("bdev-name"), c.Uint64("block-size"), nowait)
 	if err != nil {
 		return err
 	}
