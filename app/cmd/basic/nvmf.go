@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/sirupsen/logrus"
 	"github.com/urfave/cli"
@@ -458,15 +459,23 @@ func nvmfSubsystemGetListeners(c *cli.Context) error {
 // connected initiator on that listener. Without this, peer bdev_nvme
 // controllers see only an ungraceful transport drop when the IM dies and sit
 // in a "failover already in progress" state until ctrlr_loss_timeout, which
-// can wedge their reactor and trip the peer IM's liveness probe (observed
-// 2026-04-25 during a ma5-worker-9 drain test).
+// can wedge their reactor and trip the peer IM's liveness probe.
 //
 // Intended to be called from the IM's PreStop hook before kill-instance.
-// Best-effort: per-listener errors are logged and the walk continues.
+// Best-effort: per-listener errors are logged and the walk continues. Every
+// RPC uses the --timeout budget (10s by default) so a wedged-but-accepting
+// spdk_tgt cannot burn the whole prestop window.
 func NvmfSubsystemDrainListenersCmd() cli.Command {
 	return cli.Command{
 		Name:  "drain-listeners",
 		Usage: "remove every listener from every active NVMe-oF subsystem so connected initiators see a clean disconnect; intended for IM PreStop hooks",
+		Flags: []cli.Flag{
+			cli.DurationFlag{
+				Name:  "timeout",
+				Usage: "Per-RPC timeout. Keep it short: this command runs inside the PreStop budget and must not wait the default 60s on a wedged SPDK target",
+				Value: 10 * time.Second,
+			},
+		},
 		Action: func(c *cli.Context) {
 			if err := nvmfSubsystemDrainListeners(c); err != nil {
 				logrus.WithError(err).Fatalf("Failed to drain nvmf subsystem listeners")
@@ -476,7 +485,7 @@ func NvmfSubsystemDrainListenersCmd() cli.Command {
 }
 
 func nvmfSubsystemDrainListeners(c *cli.Context) error {
-	spdkCli, err := client.NewClient(context.Background())
+	spdkCli, err := client.NewClientWithDefaultTimeout(context.Background(), c.Duration("timeout"))
 	if err != nil {
 		return err
 	}
@@ -487,10 +496,12 @@ func nvmfSubsystemDrainListeners(c *cli.Context) error {
 	}
 
 	listenersRemoved := 0
+	subsystemsDrained := 0
 	for _, ss := range subsystems {
 		if strings.EqualFold(ss.Subtype, "Discovery") {
 			continue
 		}
+		subsystemsDrained++
 		for _, la := range ss.ListenAddresses {
 			if _, err := spdkCli.NvmfSubsystemRemoveListener(ss.Nqn, la.Traddr, la.Trsvcid, la.Trtype, la.Adrfam); err != nil {
 				logrus.WithError(err).Warnf("Failed to remove listener %s:%s (%s) from %s", la.Traddr, la.Trsvcid, la.Trtype, ss.Nqn)
@@ -499,6 +510,6 @@ func nvmfSubsystemDrainListeners(c *cli.Context) error {
 			listenersRemoved++
 		}
 	}
-	logrus.Infof("Drained %d NVMe-oF listeners across %d subsystems", listenersRemoved, len(subsystems))
+	logrus.Infof("Drained %d NVMe-oF listeners across %d subsystems", listenersRemoved, subsystemsDrained)
 	return nil
 }
