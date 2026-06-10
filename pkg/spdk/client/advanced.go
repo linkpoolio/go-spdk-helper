@@ -3,6 +3,7 @@ package client
 import (
 	"net"
 	"path/filepath"
+	"strings"
 
 	"github.com/sirupsen/logrus"
 
@@ -83,15 +84,8 @@ func (c *Client) StartExposeBdev(nqn, bdevName, nguid, ip, port string) error {
 
 	logrus.Infof("Exposing bdev with nqn %v, bdevName %v, nguid %v, ip %v, port %v", nqn, bdevName, nguid, ip, port)
 
-	nvmfTransportList, err := c.NvmfGetTransports("", "")
-	if err != nil {
+	if err := c.ensureNvmfTransport(spdktypes.NvmeTransportTypeTCP); err != nil {
 		return err
-	}
-	if nvmfTransportList != nil && len(nvmfTransportList) == 0 {
-		logrus.Infof("Creating transport with type %v", spdktypes.NvmeTransportTypeTCP)
-		if _, err := c.NvmfCreateTransport(spdktypes.NvmeTransportTypeTCP); err != nil && !jsonrpc.IsJSONRPCRespErrorTransportTypeAlreadyExists(err) {
-			return err
-		}
 	}
 
 	logrus.Infof("Creating subsystem with nqn %v", nqn)
@@ -114,6 +108,40 @@ func (c *Client) StartExposeBdev(nqn, bdevName, nguid, ip, port string) error {
 	return nil
 }
 
+// EnsureNvmfTransport creates the given nvmf transport on the SPDK target if
+// it is not already registered. Safe to call repeatedly; returns nil both when
+// the transport was newly created and when it already existed.
+func (c *Client) EnsureNvmfTransport(transport spdktypes.NvmeTransportType) error {
+	return c.ensureNvmfTransport(transport)
+}
+
+// transportTypesEqual reports whether two NVMe-oF transport types refer to
+// the same transport. SPDK reports trtype uppercase ("TCP", "RDMA") in
+// nvmf_get_transports responses while this package's constants are lowercase
+// ("tcp", "rdma"), so the comparison must be case-insensitive.
+func transportTypesEqual(a, b spdktypes.NvmeTransportType) bool {
+	return strings.EqualFold(string(a), string(b))
+}
+
+// ensureNvmfTransport creates the requested NVMf transport in SPDK if it is
+// not already present. "Already exists" errors are swallowed (idempotent).
+func (c *Client) ensureNvmfTransport(transport spdktypes.NvmeTransportType) error {
+	existing, err := c.NvmfGetTransports("", "")
+	if err != nil {
+		return err
+	}
+	for _, t := range existing {
+		if transportTypesEqual(t.Trtype, transport) {
+			return nil
+		}
+	}
+	logrus.Infof("Creating NVMf transport with type %v", transport)
+	if _, err := c.NvmfCreateTransport(transport); err != nil && !jsonrpc.IsJSONRPCRespErrorTransportTypeAlreadyExists(err) {
+		return err
+	}
+	return nil
+}
+
 // StartExposeBdevWithANAState exposes the bdev with the given nqn, bdevName,
 // nguid, nsUUID, ip, port, initial ANA state, and optional CNTLID range.
 // nsUUID sets a stable namespace UUID so the Linux kernel can aggregate
@@ -126,15 +154,8 @@ func (c *Client) StartExposeBdevWithANAState(nqn, bdevName, nguid, nsUUID, ip, p
 	logrus.Infof("Exposing bdev with nqn %v, bdevName %v, nguid %v, nsUUID %v, ip %v, port %v, anaState %v, minCntlid %v, maxCntlid %v",
 		nqn, bdevName, nguid, nsUUID, ip, port, anaState, minCntlid, maxCntlid)
 
-	nvmfTransportList, err := c.NvmfGetTransports("", "")
-	if err != nil {
+	if err := c.ensureNvmfTransport(spdktypes.NvmeTransportTypeTCP); err != nil {
 		return err
-	}
-	if nvmfTransportList != nil && len(nvmfTransportList) == 0 {
-		logrus.Infof("Creating transport with type %v", spdktypes.NvmeTransportTypeTCP)
-		if _, err := c.NvmfCreateTransport(spdktypes.NvmeTransportTypeTCP); err != nil && !jsonrpc.IsJSONRPCRespErrorTransportTypeAlreadyExists(err) {
-			return err
-		}
 	}
 
 	logrus.Infof("Creating subsystem with nqn %v, minCntlid %v, maxCntlid %v", nqn, minCntlid, maxCntlid)
