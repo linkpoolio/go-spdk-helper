@@ -534,3 +534,18 @@ func canExecuteInDir(dir string) bool {
 	cmd := exec.Command(probePath)
 	return cmd.Run() == nil
 }
+
+func (s *InitiatorTestSuite) TestTransportDefaultsAndOverride(c *C) {
+	// No NVMeTCPInfo at all: fall back to TCP.
+	i := &Initiator{}
+	c.Assert(i.transport(), Equals, DefaultTransportType)
+
+	// NVMeTCPInfo present but transport unset: legacy TCP behavior.
+	i.NVMeTCPInfo = &NVMeTCPInfo{SubsystemNQN: "nqn.test"}
+	c.Assert(i.transport(), Equals, DefaultTransportType)
+
+	// Explicit transport must be honored so RDMA-configured initiators do
+	// not silently connect over TCP via the public convenience methods.
+	i.NVMeTCPInfo.Transport = "rdma"
+	c.Assert(i.transport(), Equals, "rdma")
+}
