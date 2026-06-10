@@ -66,6 +66,54 @@ func runJSONRPCRequestTest(t *testing.T, fn func(*Client) error, verify func(t *
 	}
 }
 
+func TestBdevAioCreateNoWaitTriState(t *testing.T) {
+	boolPtr := func(v bool) *bool { return &v }
+
+	testCases := []struct {
+		name string
+		// nowait passed to BdevAioCreate
+		nowait *bool
+		// expectPresent indicates whether the "nowait" key must be on the wire
+		expectPresent bool
+		expectValue   bool
+	}{
+		{"nil omits nowait so SPDK default applies", nil, false, false},
+		{"explicit true is sent", boolPtr(true), true, true},
+		{"explicit false is sent", boolPtr(false), true, false},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			runJSONRPCRequestTest(t,
+				func(cli *Client) error {
+					_, err := cli.BdevAioCreate("/dev/test", "aio0", 4096, tc.nowait)
+					return err
+				},
+				func(t *testing.T, method string, params map[string]interface{}) {
+					t.Helper()
+					if method != "bdev_aio_create" {
+						t.Fatalf("unexpected method %s", method)
+					}
+					value, present := params["nowait"]
+					if present != tc.expectPresent {
+						t.Fatalf("expected nowait present=%v, got present=%v (value %#v)", tc.expectPresent, present, value)
+					}
+					if present {
+						boolValue, ok := value.(bool)
+						if !ok {
+							t.Fatalf("expected nowait to be a bool, got %T", value)
+						}
+						if boolValue != tc.expectValue {
+							t.Fatalf("expected nowait=%v, got %v", tc.expectValue, boolValue)
+						}
+					}
+				},
+				"aio0",
+			)
+		})
+	}
+}
+
 func TestIobufSetOptionsSendsBufsizesInBytes(t *testing.T) {
 	runJSONRPCRequestTest(t,
 		func(cli *Client) error {
