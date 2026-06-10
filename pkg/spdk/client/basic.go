@@ -1145,6 +1145,41 @@ func (c *Client) NvmfCreateTransportWithOpts(req spdktypes.NvmfCreateTransportRe
 	return created, json.Unmarshal(cmdOutput, &created)
 }
 
+// FrameworkStartInit tells spdk_tgt (started with --wait-for-rpc) to proceed
+// with subsystem initialisation. The paired pattern is:
+//
+//  1. spdk_tgt --wait-for-rpc starts and exposes the RPC socket but doesn't
+//     init subsystems
+//  2. caller sends iobuf_set_options / bdev_nvme_set_options / ... to tune
+//     anything that must be configured before init
+//  3. caller sends framework_start_init — spdk_tgt initialises subsystems
+//     with the tuned opts
+//
+// SPDK registers framework_start_init with the STARTUP state mask only, so
+// calling it on an already-initialized target (e.g. one started without
+// --wait-for-rpc, or a second invocation) returns a JSON-RPC error of the
+// "Method may only be called before framework is initialized" class rather
+// than succeeding as a no-op. Callers that need idempotency must tolerate
+// that error themselves.
+func (c *Client) FrameworkStartInit() (result bool, err error) {
+	cmdOutput, err := c.jsonCli.SendCommand("framework_start_init", nil)
+	if err != nil {
+		return false, err
+	}
+	return result, json.Unmarshal(cmdOutput, &result)
+}
+
+// FrameworkWaitInit blocks until SPDK reports subsystem init is complete.
+// Useful after FrameworkStartInit so callers don't race disk/bdev creation
+// against subsystem init.
+func (c *Client) FrameworkWaitInit() (result bool, err error) {
+	cmdOutput, err := c.jsonCli.SendCommand("framework_wait_init", nil)
+	if err != nil {
+		return false, err
+	}
+	return result, json.Unmarshal(cmdOutput, &result)
+}
+
 // NvmfGetTransports lists all transports if no parameters specified.
 //
 //	"trtype": Optional. Transport type, "tcp" or "rdma"
