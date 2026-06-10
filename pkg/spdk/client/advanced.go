@@ -78,13 +78,27 @@ func DetectAddressFamily(ip string) spdktypes.NvmeAddressFamily {
 	return spdktypes.NvmeAddressFamilyIPv4
 }
 
-// StartExposeBdev exposes the bdev with the given nqn, bdevName, nguid, ip, and port.
+// StartExposeBdev exposes the bdev with the given nqn, bdevName, nguid, ip,
+// and port over NVMe-oF TCP. For RDMA or mixed listeners use
+// StartExposeBdevWithTransport.
 func (c *Client) StartExposeBdev(nqn, bdevName, nguid, ip, port string) error {
+	return c.StartExposeBdevWithTransport(nqn, bdevName, nguid, ip, port, spdktypes.NvmeTransportTypeTCP)
+}
+
+// StartExposeBdevWithTransport exposes a bdev on the given transport ("tcp"
+// or "rdma"). Selecting RDMA requires the SPDK target process to have been
+// started with `--rdma` or equivalent transport support; the call will fail
+// if nvmf_create_transport rejects the type.
+//
+// Empty transport defaults to TCP for backward compat.
+func (c *Client) StartExposeBdevWithTransport(nqn, bdevName, nguid, ip, port string, transport spdktypes.NvmeTransportType) error {
+	if transport == "" {
+		transport = spdktypes.NvmeTransportTypeTCP
+	}
 	ip = spdkutil.NormalizeNvmeAddr(ip)
+	logrus.Infof("Exposing bdev with nqn %v, bdevName %v, nguid %v, ip %v, port %v, transport %v", nqn, bdevName, nguid, ip, port, transport)
 
-	logrus.Infof("Exposing bdev with nqn %v, bdevName %v, nguid %v, ip %v, port %v", nqn, bdevName, nguid, ip, port)
-
-	if err := c.ensureNvmfTransport(spdktypes.NvmeTransportTypeTCP); err != nil {
+	if err := c.ensureNvmfTransport(transport); err != nil {
 		return err
 	}
 
@@ -99,9 +113,8 @@ func (c *Client) StartExposeBdev(nqn, bdevName, nguid, ip, port string) error {
 	}
 
 	adrfam := DetectAddressFamily(ip)
-
-	logrus.Infof("Adding listener with transport address %v, transport service id %v, transport type %v, address family %v to subsystem with nqn %v", ip, port, spdktypes.NvmeTransportTypeTCP, adrfam, nqn)
-	if _, err := c.NvmfSubsystemAddListener(nqn, ip, port, spdktypes.NvmeTransportTypeTCP, adrfam); err != nil {
+	logrus.Infof("Adding listener with transport address %v, transport service id %v, transport type %v, address family %v to subsystem with nqn %v", ip, port, transport, adrfam, nqn)
+	if _, err := c.NvmfSubsystemAddListener(nqn, ip, port, transport, adrfam); err != nil {
 		return err
 	}
 
@@ -149,12 +162,23 @@ func (c *Client) ensureNvmfTransport(transport spdktypes.NvmeTransportType) erro
 // a unique controller-ID range per engine to avoid "Duplicate cntlid" errors
 // when multiple targets share one subsystem NQN. Pass 0 for defaults.
 func (c *Client) StartExposeBdevWithANAState(nqn, bdevName, nguid, nsUUID, ip, port string, anaState spdktypes.NvmfSubsystemListenerAnaState, minCntlid, maxCntlid uint16) error {
+	return c.StartExposeBdevWithANAStateAndTransport(nqn, bdevName, nguid, nsUUID, ip, port, spdktypes.NvmeTransportTypeTCP, anaState, minCntlid, maxCntlid)
+}
+
+// StartExposeBdevWithANAStateAndTransport is the transport-aware variant of
+// StartExposeBdevWithANAState. See that function for a description of the
+// nsUUID / cntlid parameters. RDMA requires the SPDK target process to have
+// transport support compiled in and configured. An empty transport defaults
+// to TCP.
+func (c *Client) StartExposeBdevWithANAStateAndTransport(nqn, bdevName, nguid, nsUUID, ip, port string, transport spdktypes.NvmeTransportType, anaState spdktypes.NvmfSubsystemListenerAnaState, minCntlid, maxCntlid uint16) error {
+	if transport == "" {
+		transport = spdktypes.NvmeTransportTypeTCP
+	}
 	ip = spdkutil.NormalizeNvmeAddr(ip)
+	logrus.Infof("Exposing bdev with nqn %v, bdevName %v, nguid %v, nsUUID %v, ip %v, port %v, transport %v, anaState %v, minCntlid %v, maxCntlid %v",
+		nqn, bdevName, nguid, nsUUID, ip, port, transport, anaState, minCntlid, maxCntlid)
 
-	logrus.Infof("Exposing bdev with nqn %v, bdevName %v, nguid %v, nsUUID %v, ip %v, port %v, anaState %v, minCntlid %v, maxCntlid %v",
-		nqn, bdevName, nguid, nsUUID, ip, port, anaState, minCntlid, maxCntlid)
-
-	if err := c.ensureNvmfTransport(spdktypes.NvmeTransportTypeTCP); err != nil {
+	if err := c.ensureNvmfTransport(transport); err != nil {
 		return err
 	}
 
@@ -169,14 +193,13 @@ func (c *Client) StartExposeBdevWithANAState(nqn, bdevName, nguid, nsUUID, ip, p
 	}
 
 	adrfam := DetectAddressFamily(ip)
-
-	logrus.Infof("Adding listener with transport address %v, transport service id %v, transport type %v, address family %v to subsystem with nqn %v", ip, port, spdktypes.NvmeTransportTypeTCP, adrfam, nqn)
-	if _, err := c.NvmfSubsystemAddListener(nqn, ip, port, spdktypes.NvmeTransportTypeTCP, adrfam); err != nil {
+	logrus.Infof("Adding listener with transport address %v, transport service id %v, transport type %v, address family %v to subsystem with nqn %v", ip, port, transport, adrfam, nqn)
+	if _, err := c.NvmfSubsystemAddListener(nqn, ip, port, transport, adrfam); err != nil {
 		return err
 	}
 
 	logrus.Infof("Setting listener ANA state to %v for subsystem with nqn %v", anaState, nqn)
-	if _, err := c.NvmfSubsystemListenerSetANAState(nqn, ip, port, spdktypes.NvmeTransportTypeTCP,
+	if _, err := c.NvmfSubsystemListenerSetANAState(nqn, ip, port, transport,
 		adrfam, anaState, spdktypes.DefaultNvmfANAGroupID); err != nil {
 		return err
 	}
