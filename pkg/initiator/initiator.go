@@ -1066,6 +1066,40 @@ func (i *Initiator) GetEndpoint() string {
 	return ""
 }
 
+// GetExecutor exposes the underlying namespace executor so callers that
+// already hold an Initiator can reuse its nsenter setup for nvme-cli
+// operations without constructing a new one. Needed by transport-specific
+// teardown paths (e.g. explicit RDMA controller disconnect during
+// switchover).
+//
+// Concurrency contract: anything run through the returned executor bypasses
+// the per-volume file lock that Initiator methods take. Callers must not use
+// it concurrently with other Initiator operations on the same volume; prefer
+// a locked convenience method (e.g. DisconnectNVMeController) where one
+// exists.
+func (i *Initiator) GetExecutor() *commonns.Executor {
+	return i.executor
+}
+
+// DisconnectNVMeController disconnects the single NVMe controller matching
+// the given NQN, IP, and port while holding the per-volume file lock. It is
+// the locked equivalent of DisconnectController(nqn, ip, port, GetExecutor())
+// and should be preferred by teardown paths (e.g. explicit RDMA controller
+// disconnect during switchover) so they cannot race other Initiator
+// operations on the same volume. Returns nil when no matching controller is
+// found (already disconnected).
+func (i *Initiator) DisconnectNVMeController(nqn, ip, port string) error {
+	if i.hostProc != "" {
+		lock, err := i.newLock("DisconnectNVMeController")
+		if err != nil {
+			return err
+		}
+		defer lock.Unlock()
+	}
+
+	return DisconnectController(nqn, ip, port, i.executor)
+}
+
 // WaitForControllerLive waits for the NVMe controller at the given address to
 // reach "live" state. This is needed after nvme connect which returns
 // immediately while the TCP handshake completes asynchronously.
