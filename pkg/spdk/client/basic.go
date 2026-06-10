@@ -1060,12 +1060,21 @@ func (c *Client) BdevNvmeGetControllerHealthInfo(name string) (healthInfo spdkty
 //
 // "keepAliveTimeoutMs": Keep alive timeout in milliseconds.
 func (c *Client) BdevNvmeSetOptions(ctrlrLossTimeoutSec, reconnectDelaySec, fastIOFailTimeoutSec, transportAckTimeout, keepAliveTimeoutMs int32) (result bool, err error) {
+	return c.BdevNvmeSetOptionsWithTos(ctrlrLossTimeoutSec, reconnectDelaySec, fastIOFailTimeoutSec, transportAckTimeout, keepAliveTimeoutMs, 0)
+}
+
+// BdevNvmeSetOptionsWithTos extends BdevNvmeSetOptions with transport_tos,
+// the IPv4 ToS / IPv6 traffic class byte set on outbound NVMe-oF
+// connections (e.g. a DSCP value that the fabric maps to a lossless traffic
+// class for RoCEv2 with PFC). Pass 0 to keep the SPDK default.
+func (c *Client) BdevNvmeSetOptionsWithTos(ctrlrLossTimeoutSec, reconnectDelaySec, fastIOFailTimeoutSec, transportAckTimeout, keepAliveTimeoutMs, transportTos int32) (result bool, err error) {
 	req := spdktypes.BdevNvmeSetOptionsRequest{
 		CtrlrLossTimeoutSec:  ctrlrLossTimeoutSec,
 		ReconnectDelaySec:    reconnectDelaySec,
 		FastIOFailTimeoutSec: fastIOFailTimeoutSec,
 		TransportAckTimeout:  transportAckTimeout,
 		KeepAliveTimeoutMs:   keepAliveTimeoutMs,
+		TransportTos:         transportTos,
 	}
 
 	cmdOutput, err := c.jsonCli.SendCommand("bdev_nvme_set_options", req)
@@ -1109,15 +1118,23 @@ func (c *Client) BdevNvmeGet(name string, timeout uint64) (bdevNvmeInfoList []sp
 	return bdevNvmeInfoList, nil
 }
 
-// NvmfCreateTransport initializes an NVMe-oF transport with the given options.
+// NvmfCreateTransport initializes an NVMe-oF transport with only a trtype.
+// Kept as-is for backwards compat and for callers that want SPDK defaults.
 //
 //	"trtype": Required. Transport type, "tcp" or "rdma". "tcp" by default.
 func (c *Client) NvmfCreateTransport(trtype spdktypes.NvmeTransportType) (created bool, err error) {
 	if trtype == "" {
 		trtype = spdktypes.NvmeTransportTypeTCP
 	}
-	req := spdktypes.NvmfCreateTransportRequest{
-		Trtype: trtype,
+	return c.NvmfCreateTransportWithOpts(spdktypes.NvmfCreateTransportRequest{Trtype: trtype})
+}
+
+// NvmfCreateTransportWithOpts creates an NVMe-oF transport with fully
+// specified opts. Use this for RDMA to set data_wr_pool_size, num_shared_buffers,
+// buf_cache_size etc. when the SPDK defaults do not fit the deployment.
+func (c *Client) NvmfCreateTransportWithOpts(req spdktypes.NvmfCreateTransportRequest) (created bool, err error) {
+	if req.Trtype == "" {
+		req.Trtype = spdktypes.NvmeTransportTypeTCP
 	}
 
 	cmdOutput, err := c.jsonCli.SendCommand("nvmf_create_transport", req)
