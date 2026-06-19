@@ -549,3 +549,41 @@ func (s *InitiatorTestSuite) TestTransportDefaultsAndOverride(c *C) {
 	i.NVMeTCPInfo.Transport = "rdma"
 	c.Assert(i.transport(), Equals, "rdma")
 }
+
+func (s *InitiatorTestSuite) TestStaleControllerPaths(c *C) {
+	const nqn = "nqn.2023-01.io.longhorn.spdk:vol-1"
+	subsystems := []Subsystem{
+		{
+			NQN: nqn,
+			Paths: []Path{
+				{Name: "nvme9", Address: "traddr=10.0.0.9,trsvcid=20001", State: "live"},       // good (new) path
+				{Name: "nvme1", Address: "traddr=10.0.0.1,trsvcid=20111", State: "deleting"},   // stale dead path
+				{Name: "nvme2", Address: "traddr=10.0.0.1,trsvcid=20116", State: "connecting"}, // stale dead path
+			},
+		},
+		{
+			NQN: "nqn.other:vol-2",
+			Paths: []Path{
+				{Name: "nvme8", Address: "traddr=10.0.0.1,trsvcid=20111", State: "live"}, // different subsystem, must be ignored
+			},
+		},
+	}
+
+	// Keeps the good path, selects only the stale paths of the matching subsystem.
+	stale := staleControllerPaths(subsystems, nqn, "10.0.0.9", "20001")
+	c.Assert(len(stale), Equals, 2)
+	names := map[string]bool{stale[0].Name: true, stale[1].Name: true}
+	c.Assert(names["nvme1"], Equals, true)
+	c.Assert(names["nvme2"], Equals, true)
+	c.Assert(names["nvme9"], Equals, false)
+
+	// No good path present (all stale) -> all paths of the subsystem are selected.
+	allStale := staleControllerPaths(subsystems, nqn, "10.0.0.99", "29999")
+	c.Assert(len(allStale), Equals, 3)
+
+	// Unknown nqn -> nothing selected.
+	c.Assert(len(staleControllerPaths(subsystems, "nqn.missing", "10.0.0.9", "20001")), Equals, 0)
+
+	// Empty input -> nothing selected.
+	c.Assert(len(staleControllerPaths(nil, nqn, "10.0.0.9", "20001")), Equals, 0)
+}
