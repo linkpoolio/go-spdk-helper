@@ -634,3 +634,54 @@ func (s *InitiatorTestSuite) TestDisconnectStaleNVMeTCPControllersNilInfo(c *C) 
 	i := &Initiator{Name: "vol-nil", logger: logrus.New()}
 	i.disconnectStaleNVMeTCPControllers() // must not panic / must not dereference nil
 }
+
+// TestReplaceDmDeviceTargetDisconnectsBeforeSuspend proves the stale-path disconnect
+// is wired into replaceDmDeviceTarget and runs BEFORE the suspend: we fail the suspend
+// and assert the stale controllers were already disconnected (and the good path spared),
+// and that the suspend error propagates.
+func (s *InitiatorTestSuite) TestReplaceDmDeviceTargetDisconnectsBeforeSuspend(c *C) {
+	const nqn = "nqn.2023-01.io.longhorn.spdk:vol-replace"
+	logFile := filepath.Join(c.MkDir(), "disconnect.log")
+
+	nvmeScript := fmt.Sprintf(`#!/bin/sh
+case "$1" in
+  --version) echo "nvme version 1.16" ;;
+  list-subsys) echo '{"Subsystems":[{"Name":"nvme-subsys0","NQN":"%s","Paths":[{"Name":"nvme9","Transport":"tcp","Address":"traddr=10.0.0.9,trsvcid=20001","State":"live"},{"Name":"nvme1","Transport":"tcp","Address":"traddr=10.0.0.1,trsvcid=20111","State":"deleting"}]}]}' ;;
+  disconnect) echo "$3" >> %s ;;
+esac
+exit 0
+`, nqn, logFile)
+
+	// dmsetup: info -> a not-suspended device (attr has no "s"); suspend -> fail.
+	dmsetupScript := `#!/bin/sh
+case "$1" in
+  info) echo "vol-replace fakeblk L--w 253 7 1 1 0" ;;
+  suspend) echo "device-mapper: suspend ioctl failed: Device or resource busy" >&2; exit 1 ;;
+  *) exit 0 ;;
+esac
+`
+
+	restorePath := setupFakeCommandPath(c, map[string]string{
+		nvmeBinary: nvmeScript,
+		"dmsetup":  dmsetupScript,
+	})
+	defer restorePath()
+
+	executor, err := newExecutorWithoutNamespace()
+	c.Assert(err, IsNil)
+
+	i := &Initiator{
+		Name:        "vol-replace",
+		NVMeTCPInfo: &NVMeTCPInfo{SubsystemNQN: nqn, TransportAddress: "10.0.0.9", TransportServiceID: "20001"},
+		executor:    executor,
+		logger:      logrus.New(),
+	}
+
+	err = i.replaceDmDeviceTarget()
+	c.Assert(err, NotNil)                         // suspend was reached and failed
+	c.Assert(err.Error(), Matches, ".*suspend.*") // ... at the suspend step
+	data, _ := os.ReadFile(logFile)
+	disconnected := string(data)
+	c.Assert(strings.Contains(disconnected, "/dev/nvme1"), Equals, true)  // stale disconnected first
+	c.Assert(strings.Contains(disconnected, "/dev/nvme9"), Equals, false) // good path spared
+}
