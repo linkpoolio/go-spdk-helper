@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -586,4 +587,50 @@ func (s *InitiatorTestSuite) TestStaleControllerPaths(c *C) {
 
 	// Empty input -> nothing selected.
 	c.Assert(len(staleControllerPaths(nil, nqn, "10.0.0.9", "20001")), Equals, 0)
+}
+
+// TestDisconnectStaleNVMeTCPControllers drives the full method against a fake
+// `nvme` CLI: it must disconnect every stale path for the subsystem and spare
+// the freshly-connected good path.
+func (s *InitiatorTestSuite) TestDisconnectStaleNVMeTCPControllers(c *C) {
+	const nqn = "nqn.2023-01.io.longhorn.spdk:vol-stale"
+	logFile := filepath.Join(c.MkDir(), "disconnect.log")
+
+	// Fake nvme: --version (for cliVersion), list-subsys (good + 2 stale paths),
+	// disconnect (record the --device value). %s = nqn, %s = logFile.
+	nvmeScript := fmt.Sprintf(`#!/bin/sh
+case "$1" in
+  --version) echo "nvme version 1.16" ;;
+  list-subsys) echo '{"Subsystems":[{"Name":"nvme-subsys0","NQN":"%s","Paths":[{"Name":"nvme9","Transport":"tcp","Address":"traddr=10.0.0.9,trsvcid=20001","State":"live"},{"Name":"nvme1","Transport":"tcp","Address":"traddr=10.0.0.1,trsvcid=20111","State":"deleting"},{"Name":"nvme2","Transport":"tcp","Address":"traddr=10.0.0.1,trsvcid=20116","State":"connecting"}]}]}' ;;
+  disconnect) echo "$3" >> %s ;;
+esac
+exit 0
+`, nqn, logFile)
+
+	restorePath := setupFakeCommandPath(c, map[string]string{nvmeBinary: nvmeScript})
+	defer restorePath()
+
+	executor, err := newExecutorWithoutNamespace()
+	c.Assert(err, IsNil)
+
+	i := &Initiator{
+		Name:        "vol-stale",
+		NVMeTCPInfo: &NVMeTCPInfo{SubsystemNQN: nqn, TransportAddress: "10.0.0.9", TransportServiceID: "20001"},
+		executor:    executor,
+		logger:      logrus.New(),
+	}
+
+	i.disconnectStaleNVMeTCPControllers()
+
+	data, _ := os.ReadFile(logFile)
+	disconnected := string(data)
+	c.Assert(strings.Contains(disconnected, "/dev/nvme1"), Equals, true)  // stale -> disconnected
+	c.Assert(strings.Contains(disconnected, "/dev/nvme2"), Equals, true)  // stale -> disconnected
+	c.Assert(strings.Contains(disconnected, "/dev/nvme9"), Equals, false) // good path -> spared
+}
+
+// TestDisconnectStaleNVMeTCPControllersNilInfo is a guard: no NVMeTCPInfo -> no-op, no panic.
+func (s *InitiatorTestSuite) TestDisconnectStaleNVMeTCPControllersNilInfo(c *C) {
+	i := &Initiator{Name: "vol-nil", logger: logrus.New()}
+	i.disconnectStaleNVMeTCPControllers() // must not panic / must not dereference nil
 }
