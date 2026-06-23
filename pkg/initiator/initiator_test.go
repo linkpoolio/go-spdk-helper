@@ -685,3 +685,81 @@ esac
 	c.Assert(strings.Contains(disconnected, "/dev/nvme1"), Equals, true)  // stale disconnected first
 	c.Assert(strings.Contains(disconnected, "/dev/nvme9"), Equals, false) // good path spared
 }
+
+// TestDisconnectNVMeController verifies the locked convenience method
+// DisconnectNVMeController disconnects exactly the controller matching the
+// (nqn, ip, port) triple and spares non-matching paths / other subsystems.
+// It runs with hostProc="" so the per-volume lock is skipped (the lock
+// acquisition itself is contract-tested by TestNewLockInvalidHostProc and
+// requires a writable /var/run/longhorn); the delegate + targeting logic --
+// the part worth pinning -- is fully exercised here.
+func (s *InitiatorTestSuite) TestDisconnectNVMeController(c *C) {
+	const nqn = "nqn.2023-01.io.longhorn.spdk:vol-locked"
+	const otherNQN = "nqn.2023-01.io.longhorn.spdk:vol-other"
+	logFile := filepath.Join(c.MkDir(), "disconnect.log")
+
+	// Two subsystems: the target one with a matching + a non-matching path,
+	// and an unrelated subsystem that must be ignored entirely.
+	nvmeScript := fmt.Sprintf(`#!/bin/sh
+case "$1" in
+  --version) echo "nvme version 1.16" ;;
+  list-subsys) echo '{"Subsystems":[{"Name":"s0","NQN":"%s","Paths":[{"Name":"nvme9","Transport":"tcp","Address":"traddr=10.0.0.9,trsvcid=20001","State":"live"},{"Name":"nvme7","Transport":"tcp","Address":"traddr=10.0.0.7,trsvcid=20007","State":"live"}]},{"Name":"s1","NQN":"%s","Paths":[{"Name":"nvme8","Transport":"tcp","Address":"traddr=10.0.0.9,trsvcid=20001","State":"live"}]}]}' ;;
+  disconnect) echo "$3" >> %s ;;
+esac
+exit 0
+`, nqn, otherNQN, logFile)
+
+	restorePath := setupFakeCommandPath(c, map[string]string{nvmeBinary: nvmeScript})
+	defer restorePath()
+
+	executor, err := newExecutorWithoutNamespace()
+	c.Assert(err, IsNil)
+
+	i := &Initiator{
+		Name:     "vol-locked",
+		executor: executor,
+		logger:   logrus.New(),
+		// hostProc intentionally empty: skip the file lock (env-dependent);
+		// the lock contract is covered by TestNewLockInvalidHostProc.
+	}
+
+	// Disconnect the (nqn, 10.0.0.9, 20001) controller -- matches nvme9 only.
+	c.Assert(i.DisconnectNVMeController(nqn, "10.0.0.9", "20001"), IsNil)
+
+	data, _ := os.ReadFile(logFile)
+	disconnected := string(data)
+	c.Assert(strings.Contains(disconnected, "/dev/nvme9"), Equals, true)  // matching path -> disconnected
+	c.Assert(strings.Contains(disconnected, "/dev/nvme7"), Equals, false) // same subsystem, wrong ip:port -> spared
+	c.Assert(strings.Contains(disconnected, "/dev/nvme8"), Equals, false) // different subsystem (same ip:port) -> spared
+}
+
+// TestDisconnectControllerWithTimeoutBoundsStaleDisconnect proves the short
+// dedicated timeout on the pre-suspend stale-controller disconnect actually
+// bounds the call: a fake nvme that sleeps far longer than the timeout must
+// return within the timeout (plus grace), not hang for the full ExecuteTimeout.
+// This pins the b6ea1c9 hardening (staleControllerDisconnectTimeout = 15s in
+// production; here a 200ms timeout + a 5s sleep keeps the test fast).
+func (s *InitiatorTestSuite) TestDisconnectControllerWithTimeoutBoundsStaleDisconnect(c *C) {
+	// Fake nvme: --version returns fast; disconnect --device sleeps 5s.
+	nvmeScript := `#!/bin/sh
+case "$1" in
+  --version) echo "nvme version 1.16" ;;
+  disconnect) sleep 5 ;;
+esac
+exit 0
+`
+	restorePath := setupFakeCommandPath(c, map[string]string{nvmeBinary: nvmeScript})
+	defer restorePath()
+
+	executor, err := newExecutorWithoutNamespace()
+	c.Assert(err, IsNil)
+
+	const timeout = 200 * time.Millisecond
+	start := time.Now()
+	err = disconnectControllerWithTimeout("nvme99", timeout, executor)
+	elapsed := time.Since(start)
+
+	c.Assert(err, NotNil)                                                       // timed out
+	c.Assert(err.Error(), Matches, ".*timeout executing.*")                     // bounded error
+	c.Assert(elapsed < 2*time.Second, Equals, true, Commentf("disconnect took %v, expected < 2s (timeout 200ms + grace)", elapsed))
+}
