@@ -636,13 +636,37 @@ func (i *Initiator) StartNvmeTCPInitiator(transportAddress, transportServiceID s
 
 	if dmDeviceAndEndpointCleanupRequired {
 		if dmDeviceIsBusy {
-			// Endpoint is already created, just replace the target device
-			i.logger.Info("Linear dm device is busy, trying the best to replace the target device for NVMe/TCP initiator")
-			if err := i.replaceDmDeviceTarget(); err != nil {
-				i.logger.WithError(err).Warnf("Failed to replace the target device for NVMe/TCP initiator")
+			// The dm-linear exists but is busy (typically held open by a stale
+			// kubelet mount from a force-deleted pod). replaceDmDeviceTarget
+			// would suspend the device to reload the target, but dm_suspend
+			// hangs when the device is busy (it waits for in-flight I/O to
+			// quiesce, which can't complete while a stale mount holds it open)
+			// — wedging the dmsetup process in uninterruptible D-state.
+			//
+			// Instead, force-remove the device: dmsetup remove --force swaps in
+			// the error target, EIOing all in-flight I/O and releasing the
+			// stale mount. Then create a fresh dm-linear pointing at the new
+			// NVMe namespace. The force-remove is bounded at 10s (not
+			// ExecuteTimeout) so a truly stuck device doesn't hang for 3 min.
+			i.logger.Info("Linear dm device is busy, force-removing and recreating for NVMe/TCP initiator")
+			if err := util.DmsetupRemoveWithTimeout(i.Name, true /*force*/, false, i.executor, 10*time.Second); err != nil {
+				// Force-remove failed (truly wedged). Fall back to the probe
+				// + suspend path as a last resort — if the device is dead the
+				// probe will skip the suspend; if alive the suspend may still
+				// wedge but we've exhausted the clean options.
+				i.logger.WithError(err).Warnf("Force-remove of busy dm-linear failed; falling back to replace target device")
+				if err := i.replaceDmDeviceTarget(); err != nil {
+					i.logger.WithError(err).Warnf("Failed to replace the target device for NVMe/TCP initiator")
+				} else {
+					dmDeviceIsBusy = false
+				}
 			} else {
-				i.logger.Info("Successfully replaced the target device for NVMe/TCP initiator")
+				// Force-remove succeeded; create a fresh dm-linear.
 				dmDeviceIsBusy = false
+				i.logger.Info("Creating linear dm device for NVMe/TCP initiator after force-removing busy device")
+				if err := i.createLinearDmDevice(); err != nil {
+					return false, errors.Wrapf(err, "failed to create linear dm device for NVMe/TCP initiator %s after force-remove", i.Name)
+				}
 			}
 		} else {
 			i.logger.Info("Creating linear dm device for NVMe/TCP initiator")
