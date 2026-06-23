@@ -2,6 +2,7 @@ package initiator
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -503,6 +504,33 @@ func (i *Initiator) disconnectStaleNVMeTCPControllers() {
 	}
 }
 
+// dmLinearDeviceDead probes the dm-linear device at devPath and reports whether
+// it is confirmed dead: a non-blocking open returns ENXIO (the dm table is
+// gone) or the first read returns EIO/ENXIO (the backing NVMe namespace is
+// gone). It is deliberately conservative — returns false (NOT dead) for a
+// missing path, a non-device, or any ambiguous error — so a healthy or merely
+// busy device always takes the safe suspend path.
+//
+// This mirrors longhorn-spdk-engine's suspendDeviceConfirmedDead, but is local
+// to the initiator because replaceDmDeviceTarget's suspend path was not covered
+// by the engine's Suspend() probe.
+func dmLinearDeviceDead(devPath string) bool {
+	statInfo, err := os.Stat(devPath)
+	if err != nil || statInfo.Mode()&os.ModeDevice == 0 {
+		return false
+	}
+	f, err := os.OpenFile(devPath, os.O_RDONLY|unix.O_NONBLOCK, 0)
+	if err != nil {
+		return errors.Is(err, unix.ENXIO) || errors.Is(err, unix.EIO)
+	}
+	defer func() { _ = f.Close() }()
+	buf := make([]byte, 1)
+	if _, err := f.Read(buf); err != nil && !errors.Is(err, io.EOF) {
+		return errors.Is(err, unix.EIO) || errors.Is(err, unix.ENXIO)
+	}
+	return false
+}
+
 func (i *Initiator) replaceDmDeviceTarget() error {
 	// The linear dm device's current backing may still point at a stale NVMe/TCP path
 	// (e.g. the SPDK target moved after an instance-manager restart). Suspending it would
@@ -516,6 +544,18 @@ func (i *Initiator) replaceDmDeviceTarget() error {
 	}
 
 	if !suspended {
+		// A dmsetup suspend on a dead dm-linear (backing NVMe namespace gone
+		// after an instance-manager restart) wedges forever in D-state:
+		// dm_suspend waits for in-flight I/O to drain, and I/O to a dead
+		// backing can never complete. --noflush does NOT avoid this: dm_suspend
+		// still waits on already-dispatched I/O. Probe the device; if confirmed
+		// dead, skip the suspend+reload+resume entirely and return an error so
+		// the EF observer heal path recreates the dm-linear from scratch (which
+		// uses non-blocking deferred removal, not suspend).
+		if dmLinearDeviceDead(i.Endpoint) {
+			i.logger.Warnf("Skipping dm target replace for %s: backing device %s confirmed dead; a suspend would wedge in D-state", i.Name, i.Endpoint)
+			return errors.Errorf("dm-linear device %s confirmed dead; skipping suspend to avoid D-state wedge", i.Endpoint)
+		}
 		if err := i.suspendLinearDmDevice(true, false); err != nil {
 			return errors.Wrapf(err, "failed to suspend linear dm device for initiator %s", i.Name)
 		}

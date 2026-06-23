@@ -763,3 +763,28 @@ exit 0
 	c.Assert(err.Error(), Matches, ".*timeout executing.*")                     // bounded error
 	c.Assert(elapsed < 2*time.Second, Equals, true, Commentf("disconnect took %v, expected < 2s (timeout 200ms + grace)", elapsed))
 }
+
+// TestDmLinearDeviceDead pins the conservative behavior of dmLinearDeviceDead:
+// missing path, regular file, and /dev/null (char device, reads EOF) all return
+// false (NOT dead) so the suspend path is never wrongly skipped on a healthy or
+// merely-absent device. The actual ENXIO/EIO dead case is integration-level
+// (requires a torn-down dm-linear); the logic mirrors the proven
+// suspendDeviceConfirmedDead in longhorn-spdk-engine.
+func TestDmLinearDeviceDead(t *testing.T) {
+	// Missing path -> false (conservative; device may not exist yet).
+	if dmLinearDeviceDead("/nonexistent/device/path") {
+		t.Fatal("missing path should not be reported as dead")
+	}
+	// Regular file -> false (not a device).
+	tmpFile := filepath.Join(t.TempDir(), "notadevice")
+	if err := os.WriteFile(tmpFile, []byte("x"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if dmLinearDeviceDead(tmpFile) {
+		t.Fatal("regular file should not be reported as dead")
+	}
+	// /dev/null (char device, reads EOF) -> false (alive; just no data).
+	if dmLinearDeviceDead("/dev/null") {
+		t.Fatal("/dev/null should not be reported as dead")
+	}
+}
