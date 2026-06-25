@@ -7,6 +7,7 @@ require (
 	github.com/c9s/goprocinfo v0.0.0-20210130143923-c95fcf8c64a8
 	github.com/cockroachdb/errors v1.12.0
 	github.com/longhorn/go-common-libs v0.0.0-20260502161928-1e84fa75a8f1
+	github.com/pkg/errors v0.9.1
 	github.com/sirupsen/logrus v1.9.4
 	github.com/urfave/cli v1.22.17
 	golang.org/x/sys v0.39.0
@@ -24,7 +25,6 @@ require (
 	github.com/kr/pretty v0.3.1 // indirect
 	github.com/kr/text v0.2.0 // indirect
 	github.com/mitchellh/go-ps v1.0.0 // indirect
-	github.com/pkg/errors v0.9.1 // indirect
 	github.com/power-devops/perfstat v0.0.0-20210106213030-5aafc221ea8c // indirect
 	github.com/rogpeppe/go-internal v1.12.0 // indirect
 	github.com/russross/blackfriday/v2 v2.1.0 // indirect
@@ -34,3 +34,5 @@ require (
 	golang.org/x/text v0.32.0 // indirect
 	k8s.io/apimachinery v0.28.15 // indirect
 )
+
+replace github.com/longhorn/go-common-libs => github.com/linkpoolio/go-common-libs v0.0.0-20260623134507-fea5f2490080
