@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -533,4 +534,257 @@ func canExecuteInDir(dir string) bool {
 
 	cmd := exec.Command(probePath)
 	return cmd.Run() == nil
+}
+
+func (s *InitiatorTestSuite) TestTransportDefaultsAndOverride(c *C) {
+	// No NVMeTCPInfo at all: fall back to TCP.
+	i := &Initiator{}
+	c.Assert(i.transport(), Equals, DefaultTransportType)
+
+	// NVMeTCPInfo present but transport unset: legacy TCP behavior.
+	i.NVMeTCPInfo = &NVMeTCPInfo{SubsystemNQN: "nqn.test"}
+	c.Assert(i.transport(), Equals, DefaultTransportType)
+
+	// Explicit transport must be honored so RDMA-configured initiators do
+	// not silently connect over TCP via the public convenience methods.
+	i.NVMeTCPInfo.Transport = "rdma"
+	c.Assert(i.transport(), Equals, "rdma")
+}
+
+func (s *InitiatorTestSuite) TestStaleControllerPaths(c *C) {
+	const nqn = "nqn.2023-01.io.longhorn.spdk:vol-1"
+	subsystems := []Subsystem{
+		{
+			NQN: nqn,
+			Paths: []Path{
+				{Name: "nvme9", Address: "traddr=10.0.0.9,trsvcid=20001", State: "live"},       // good (new) path
+				{Name: "nvme1", Address: "traddr=10.0.0.1,trsvcid=20111", State: "deleting"},   // stale dead path
+				{Name: "nvme2", Address: "traddr=10.0.0.1,trsvcid=20116", State: "connecting"}, // stale dead path
+			},
+		},
+		{
+			NQN: "nqn.other:vol-2",
+			Paths: []Path{
+				{Name: "nvme8", Address: "traddr=10.0.0.1,trsvcid=20111", State: "live"}, // different subsystem, must be ignored
+			},
+		},
+	}
+
+	// Keeps the good path, selects only the stale paths of the matching subsystem.
+	stale := staleControllerPaths(subsystems, nqn, "10.0.0.9", "20001")
+	c.Assert(len(stale), Equals, 2)
+	names := map[string]bool{stale[0].Name: true, stale[1].Name: true}
+	c.Assert(names["nvme1"], Equals, true)
+	c.Assert(names["nvme2"], Equals, true)
+	c.Assert(names["nvme9"], Equals, false)
+
+	// No good path present (all stale) -> all paths of the subsystem are selected.
+	allStale := staleControllerPaths(subsystems, nqn, "10.0.0.99", "29999")
+	c.Assert(len(allStale), Equals, 3)
+
+	// Unknown nqn -> nothing selected.
+	c.Assert(len(staleControllerPaths(subsystems, "nqn.missing", "10.0.0.9", "20001")), Equals, 0)
+
+	// Empty input -> nothing selected.
+	c.Assert(len(staleControllerPaths(nil, nqn, "10.0.0.9", "20001")), Equals, 0)
+}
+
+// TestDisconnectStaleNVMeTCPControllers drives the full method against a fake
+// `nvme` CLI: it must disconnect every stale path for the subsystem and spare
+// the freshly-connected good path.
+func (s *InitiatorTestSuite) TestDisconnectStaleNVMeTCPControllers(c *C) {
+	const nqn = "nqn.2023-01.io.longhorn.spdk:vol-stale"
+	logFile := filepath.Join(c.MkDir(), "disconnect.log")
+
+	// Fake nvme: --version (for cliVersion), list-subsys (good + 2 stale paths),
+	// disconnect (record the --device value). %s = nqn, %s = logFile.
+	nvmeScript := fmt.Sprintf(`#!/bin/sh
+case "$1" in
+  --version) echo "nvme version 1.16" ;;
+  list-subsys) echo '{"Subsystems":[{"Name":"nvme-subsys0","NQN":"%s","Paths":[{"Name":"nvme9","Transport":"tcp","Address":"traddr=10.0.0.9,trsvcid=20001","State":"live"},{"Name":"nvme1","Transport":"tcp","Address":"traddr=10.0.0.1,trsvcid=20111","State":"deleting"},{"Name":"nvme2","Transport":"tcp","Address":"traddr=10.0.0.1,trsvcid=20116","State":"connecting"}]}]}' ;;
+  disconnect) echo "$3" >> %s ;;
+esac
+exit 0
+`, nqn, logFile)
+
+	restorePath := setupFakeCommandPath(c, map[string]string{nvmeBinary: nvmeScript})
+	defer restorePath()
+
+	executor, err := newExecutorWithoutNamespace()
+	c.Assert(err, IsNil)
+
+	i := &Initiator{
+		Name:        "vol-stale",
+		NVMeTCPInfo: &NVMeTCPInfo{SubsystemNQN: nqn, TransportAddress: "10.0.0.9", TransportServiceID: "20001"},
+		executor:    executor,
+		logger:      logrus.New(),
+	}
+
+	i.disconnectStaleNVMeTCPControllers()
+
+	data, _ := os.ReadFile(logFile)
+	disconnected := string(data)
+	c.Assert(strings.Contains(disconnected, "/dev/nvme1"), Equals, true)  // stale -> disconnected
+	c.Assert(strings.Contains(disconnected, "/dev/nvme2"), Equals, true)  // stale -> disconnected
+	c.Assert(strings.Contains(disconnected, "/dev/nvme9"), Equals, false) // good path -> spared
+}
+
+// TestDisconnectStaleNVMeTCPControllersNilInfo is a guard: no NVMeTCPInfo -> no-op, no panic.
+func (s *InitiatorTestSuite) TestDisconnectStaleNVMeTCPControllersNilInfo(c *C) {
+	i := &Initiator{Name: "vol-nil", logger: logrus.New()}
+	i.disconnectStaleNVMeTCPControllers() // must not panic / must not dereference nil
+}
+
+// TestReplaceDmDeviceTargetDisconnectsBeforeSuspend proves the stale-path disconnect
+// is wired into replaceDmDeviceTarget and runs BEFORE the suspend: we fail the suspend
+// and assert the stale controllers were already disconnected (and the good path spared),
+// and that the suspend error propagates.
+func (s *InitiatorTestSuite) TestReplaceDmDeviceTargetDisconnectsBeforeSuspend(c *C) {
+	const nqn = "nqn.2023-01.io.longhorn.spdk:vol-replace"
+	logFile := filepath.Join(c.MkDir(), "disconnect.log")
+
+	nvmeScript := fmt.Sprintf(`#!/bin/sh
+case "$1" in
+  --version) echo "nvme version 1.16" ;;
+  list-subsys) echo '{"Subsystems":[{"Name":"nvme-subsys0","NQN":"%s","Paths":[{"Name":"nvme9","Transport":"tcp","Address":"traddr=10.0.0.9,trsvcid=20001","State":"live"},{"Name":"nvme1","Transport":"tcp","Address":"traddr=10.0.0.1,trsvcid=20111","State":"deleting"}]}]}' ;;
+  disconnect) echo "$3" >> %s ;;
+esac
+exit 0
+`, nqn, logFile)
+
+	// dmsetup: info -> a not-suspended device (attr has no "s"); suspend -> fail.
+	dmsetupScript := `#!/bin/sh
+case "$1" in
+  info) echo "vol-replace fakeblk L--w 253 7 1 1 0" ;;
+  suspend) echo "device-mapper: suspend ioctl failed: Device or resource busy" >&2; exit 1 ;;
+  *) exit 0 ;;
+esac
+`
+
+	restorePath := setupFakeCommandPath(c, map[string]string{
+		nvmeBinary: nvmeScript,
+		"dmsetup":  dmsetupScript,
+	})
+	defer restorePath()
+
+	executor, err := newExecutorWithoutNamespace()
+	c.Assert(err, IsNil)
+
+	i := &Initiator{
+		Name:        "vol-replace",
+		NVMeTCPInfo: &NVMeTCPInfo{SubsystemNQN: nqn, TransportAddress: "10.0.0.9", TransportServiceID: "20001"},
+		executor:    executor,
+		logger:      logrus.New(),
+	}
+
+	err = i.replaceDmDeviceTarget()
+	c.Assert(err, NotNil)                         // suspend was reached and failed
+	c.Assert(err.Error(), Matches, ".*suspend.*") // ... at the suspend step
+	data, _ := os.ReadFile(logFile)
+	disconnected := string(data)
+	c.Assert(strings.Contains(disconnected, "/dev/nvme1"), Equals, true)  // stale disconnected first
+	c.Assert(strings.Contains(disconnected, "/dev/nvme9"), Equals, false) // good path spared
+}
+
+// TestDisconnectNVMeController verifies the locked convenience method
+// DisconnectNVMeController disconnects exactly the controller matching the
+// (nqn, ip, port) triple and spares non-matching paths / other subsystems.
+// It runs with hostProc="" so the per-volume lock is skipped (the lock
+// acquisition itself is contract-tested by TestNewLockInvalidHostProc and
+// requires a writable /var/run/longhorn); the delegate + targeting logic --
+// the part worth pinning -- is fully exercised here.
+func (s *InitiatorTestSuite) TestDisconnectNVMeController(c *C) {
+	const nqn = "nqn.2023-01.io.longhorn.spdk:vol-locked"
+	const otherNQN = "nqn.2023-01.io.longhorn.spdk:vol-other"
+	logFile := filepath.Join(c.MkDir(), "disconnect.log")
+
+	// Two subsystems: the target one with a matching + a non-matching path,
+	// and an unrelated subsystem that must be ignored entirely.
+	nvmeScript := fmt.Sprintf(`#!/bin/sh
+case "$1" in
+  --version) echo "nvme version 1.16" ;;
+  list-subsys) echo '{"Subsystems":[{"Name":"s0","NQN":"%s","Paths":[{"Name":"nvme9","Transport":"tcp","Address":"traddr=10.0.0.9,trsvcid=20001","State":"live"},{"Name":"nvme7","Transport":"tcp","Address":"traddr=10.0.0.7,trsvcid=20007","State":"live"}]},{"Name":"s1","NQN":"%s","Paths":[{"Name":"nvme8","Transport":"tcp","Address":"traddr=10.0.0.9,trsvcid=20001","State":"live"}]}]}' ;;
+  disconnect) echo "$3" >> %s ;;
+esac
+exit 0
+`, nqn, otherNQN, logFile)
+
+	restorePath := setupFakeCommandPath(c, map[string]string{nvmeBinary: nvmeScript})
+	defer restorePath()
+
+	executor, err := newExecutorWithoutNamespace()
+	c.Assert(err, IsNil)
+
+	i := &Initiator{
+		Name:     "vol-locked",
+		executor: executor,
+		logger:   logrus.New(),
+		// hostProc intentionally empty: skip the file lock (env-dependent);
+		// the lock contract is covered by TestNewLockInvalidHostProc.
+	}
+
+	// Disconnect the (nqn, 10.0.0.9, 20001) controller -- matches nvme9 only.
+	c.Assert(i.DisconnectNVMeController(nqn, "10.0.0.9", "20001"), IsNil)
+
+	data, _ := os.ReadFile(logFile)
+	disconnected := string(data)
+	c.Assert(strings.Contains(disconnected, "/dev/nvme9"), Equals, true)  // matching path -> disconnected
+	c.Assert(strings.Contains(disconnected, "/dev/nvme7"), Equals, false) // same subsystem, wrong ip:port -> spared
+	c.Assert(strings.Contains(disconnected, "/dev/nvme8"), Equals, false) // different subsystem (same ip:port) -> spared
+}
+
+// TestDisconnectControllerWithTimeoutBoundsStaleDisconnect proves the short
+// dedicated timeout on the pre-suspend stale-controller disconnect actually
+// bounds the call: a fake nvme that sleeps far longer than the timeout must
+// return within the timeout (plus grace), not hang for the full ExecuteTimeout.
+// This pins the b6ea1c9 hardening (staleControllerDisconnectTimeout = 15s in
+// production; here a 200ms timeout + a 5s sleep keeps the test fast).
+func (s *InitiatorTestSuite) TestDisconnectControllerWithTimeoutBoundsStaleDisconnect(c *C) {
+	// Fake nvme: --version returns fast; disconnect --device sleeps 5s.
+	nvmeScript := `#!/bin/sh
+case "$1" in
+  --version) echo "nvme version 1.16" ;;
+  disconnect) sleep 5 ;;
+esac
+exit 0
+`
+	restorePath := setupFakeCommandPath(c, map[string]string{nvmeBinary: nvmeScript})
+	defer restorePath()
+
+	executor, err := newExecutorWithoutNamespace()
+	c.Assert(err, IsNil)
+
+	const timeout = 200 * time.Millisecond
+	start := time.Now()
+	err = disconnectControllerWithTimeout("nvme99", timeout, executor)
+	elapsed := time.Since(start)
+
+	c.Assert(err, NotNil)                                                       // timed out
+	c.Assert(err.Error(), Matches, ".*timeout executing.*")                     // bounded error
+	c.Assert(elapsed < 2*time.Second, Equals, true, Commentf("disconnect took %v, expected < 2s (timeout 200ms + grace)", elapsed))
+}
+
+// TestDmLinearDeviceDead pins the conservative behavior of dmLinearDeviceDead:
+// missing path, regular file, and /dev/null (char device, reads EOF) all return
+// false (NOT dead) so the suspend path is never wrongly skipped on a healthy or
+// merely-absent device. The actual ENXIO/EIO dead case is integration-level
+// (requires a torn-down dm-linear); the logic mirrors the proven
+// suspendDeviceConfirmedDead in longhorn-spdk-engine.
+func TestDmLinearDeviceDead(t *testing.T) {
+	// Missing path -> false (conservative; device may not exist yet).
+	if dmLinearDeviceDead("/nonexistent/device/path") {
+		t.Fatal("missing path should not be reported as dead")
+	}
+	// Regular file -> false (not a device).
+	tmpFile := filepath.Join(t.TempDir(), "notadevice")
+	if err := os.WriteFile(tmpFile, []byte("x"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if dmLinearDeviceDead(tmpFile) {
+		t.Fatal("regular file should not be reported as dead")
+	}
+	// /dev/null (char device, reads EOF) -> false (alive; just no data).
+	if dmLinearDeviceDead("/dev/null") {
+		t.Fatal("/dev/null should not be reported as dead")
+	}
 }
