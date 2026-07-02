@@ -78,3 +78,11 @@ func TestDisconnectDeadSiblingsRequiresNQN(t *testing.T) {
 	// a test environment without host namespaces).
 	i.disconnectDeadSiblingControllers("10.0.0.1", "4420")
 }
+
+// DisconnectDeadSubsystemControllers must be a no-op for an empty NQN — it
+// can only ever act on a specific volume's subsystem.
+func TestDisconnectDeadSubsystemControllersRequiresNQN(t *testing.T) {
+	if n := DisconnectDeadSubsystemControllers("", nil, nil); n != 0 {
+		t.Fatalf("expected no disconnects for empty NQN, got %d", n)
+	}
+}
