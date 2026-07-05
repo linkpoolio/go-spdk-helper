@@ -16,3 +16,21 @@ func TestIsJSONRPCRespErrorConnectionTimeout(t *testing.T) {
 		t.Fatal("nil must not match")
 	}
 }
+
+func TestIsJSONRPCRespErrorAlreadyExists(t *testing.T) {
+	mk := func(code RespErrorCode) error {
+		return JSONClientError{ErrorDetail: &ResponseError{Code: code, Message: "A controller named x already exists and multipath is disabled"}}
+	}
+	if !IsJSONRPCRespErrorAlreadyExists(mk(RespErrorCodeAlreadyExists)) {
+		t.Fatal("expected -114 to match")
+	}
+	if IsJSONRPCRespErrorAlreadyExists(mk(RespErrorCodeNoSuchDevice)) {
+		t.Fatal("-19 must not match")
+	}
+	if IsJSONRPCRespErrorAlreadyExists(mk(RespErrorCodeConnectionTimeout)) {
+		t.Fatal("-110 must not match")
+	}
+	if IsJSONRPCRespErrorAlreadyExists(nil) {
+		t.Fatal("nil must not match")
+	}
+}
