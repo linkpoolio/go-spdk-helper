@@ -34,3 +34,5 @@ require (
 	golang.org/x/text v0.32.0 // indirect
 	k8s.io/apimachinery v0.28.15 // indirect
 )
+
+replace github.com/longhorn/go-common-libs => github.com/linkpoolio/go-common-libs v0.0.0-20260623134507-fea5f2490080
