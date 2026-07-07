@@ -549,3 +549,46 @@ func (s *InitiatorTestSuite) TestTransportDefaultsAndOverride(c *C) {
 	i.NVMeTCPInfo.Transport = "rdma"
 	c.Assert(i.transport(), Equals, "rdma")
 }
+
+// io_timeout env parsing (plain testing.T)
+
+func TestNvmeIOTimeoutMs(t *testing.T) {
+	cases := []struct {
+		name string
+		set  bool
+		val  string
+		want int
+	}{
+		{"unset returns default", false, "", defaultNvmeIOTimeoutMs},
+		{"empty returns default", true, "", defaultNvmeIOTimeoutMs},
+		{"whitespace-only returns default", true, "   ", defaultNvmeIOTimeoutMs},
+		{"valid override parsed", true, "60000", 60000},
+		{"surrounding whitespace trimmed", true, " 45000 ", 45000},
+		{"zero rejected, returns default", true, "0", defaultNvmeIOTimeoutMs},
+		{"negative rejected, returns default", true, "-1", defaultNvmeIOTimeoutMs},
+		{"unparseable returns default", true, "5m", defaultNvmeIOTimeoutMs},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.set {
+				t.Setenv(nvmeIOTimeoutEnvVar, tc.val)
+			} else {
+				os.Unsetenv(nvmeIOTimeoutEnvVar)
+			}
+			if got := nvmeIOTimeoutMs(); got != tc.want {
+				t.Errorf("nvmeIOTimeoutMs() = %d, want %d", got, tc.want)
+			}
+		})
+	}
+}
+
+// applyNVMeIOTimeout must be a silent no-op when there is no connected
+// namespace to act on (nil NVMeTCPInfo or empty NamespaceName) — the
+// device-up hook can then call it unconditionally.
+func TestApplyNVMeIOTimeoutSkipsWithoutNamespace(t *testing.T) {
+	i := &Initiator{Name: "vol-a", logger: logrus.WithField("test", "io-timeout")}
+	i.applyNVMeIOTimeout()
+
+	i.NVMeTCPInfo = &NVMeTCPInfo{SubsystemNQN: "nqn.test"}
+	i.applyNVMeIOTimeout()
+}
