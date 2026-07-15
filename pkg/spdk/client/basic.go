@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/cockroachdb/errors"
 
+	"github.com/longhorn/go-spdk-helper/pkg/jsonrpc"
 	spdktypes "github.com/longhorn/go-spdk-helper/pkg/spdk/types"
 )
 
@@ -510,10 +512,18 @@ func (c *Client) BdevLvolResize(name string, sizeInMib uint64) (resized bool, er
 //	"srcLvolName": Required. UUID or alias of lvol to create a copy from.
 //
 //	"dstBdevName": Required. Name of the bdev that acts as destination for the copy.
-func (c *Client) BdevLvolStartShallowCopy(srcLvolName, dstBdevName string) (operationId uint32, err error) {
+//
+//	"pipelineDepth": Optional. Maximum number of clusters kept in flight on the source
+//	side of the copy. 0 and 1 both mean the SPDK default strict-serial walker and are
+//	omitted from the request for wire compatibility with SPDK targets lacking the
+//	shallow-copy pipelining patch.
+func (c *Client) BdevLvolStartShallowCopy(srcLvolName, dstBdevName string, pipelineDepth uint32) (operationId uint32, err error) {
 	req := spdktypes.BdevLvolShallowCopyRequest{
 		SrcLvolName: srcLvolName,
 		DstBdevName: dstBdevName,
+	}
+	if pipelineDepth > 1 {
+		req.PipelineDepth = pipelineDepth
 	}
 
 	cmdOutput, err := c.jsonCli.SendCommand("bdev_lvol_start_shallow_copy", req)
@@ -540,11 +550,19 @@ func (c *Client) BdevLvolStartShallowCopy(srcLvolName, dstBdevName string) (oper
 //	"dstBdevName": Required. Name of the bdev that acts as destination for the copy.
 //
 //	"clusters": Required. Array of clusters indexes to be synchronized with copy or unmap.
-func (c *Client) BdevLvolStartRangeShallowCopy(srcLvolName, dstBdevName string, clusters []uint64) (operationId uint32, err error) {
+//
+//	"pipelineDepth": Optional. Maximum number of clusters kept in flight on the source
+//	side of the copy. 0 and 1 both mean the SPDK default strict-serial walker and are
+//	omitted from the request for wire compatibility with SPDK targets lacking the
+//	shallow-copy pipelining patch.
+func (c *Client) BdevLvolStartRangeShallowCopy(srcLvolName, dstBdevName string, clusters []uint64, pipelineDepth uint32) (operationId uint32, err error) {
 	req := spdktypes.BdevLvolRangeShallowCopyRequest{
 		SrcLvolName: srcLvolName,
 		DstBdevName: dstBdevName,
 		Clusters:    clusters,
+	}
+	if pipelineDepth > 1 {
+		req.PipelineDepth = pipelineDepth
 	}
 
 	cmdOutput, err := c.jsonCli.SendCommand("bdev_lvol_start_range_shallow_copy", req)
@@ -975,6 +993,21 @@ func (c *Client) BdevRaidGrowBaseBdev(raidName, baseBdevName string) (growed boo
 // "multipath": Multipathing behavior: disable, failover, multipath. Default is failover
 func (c *Client) BdevNvmeAttachController(name, subnqn, traddr, trsvcid string, trtype spdktypes.NvmeTransportType, adrfam spdktypes.NvmeAddressFamily,
 	ctrlrLossTimeoutSec, reconnectDelaySec, fastIOFailTimeoutSec int32, multipath string) (bdevNameList []string, err error) {
+	// Long blob recovery time might be needed if the spdk_tgt is not shutdown gracefully.
+	return c.BdevNvmeAttachControllerWithTimeout(name, subnqn, traddr, trsvcid, trtype, adrfam,
+		ctrlrLossTimeoutSec, reconnectDelaySec, fastIOFailTimeoutSec, multipath, jsonrpc.DefaultLongTimeout)
+}
+
+// BdevNvmeAttachControllerWithTimeout is BdevNvmeAttachController with a
+// caller-supplied RPC timeout. Attaching a controller whose target is
+// unreachable, or whose spdk_tgt reactor is wedged, otherwise blocks for the
+// 24h long timeout — and callers such as the engine hold their write lock
+// across the attach, so a single stuck attach freezes every reader on that
+// engine (and, at scale, the whole instance-manager). A bounded timeout lets
+// the attach fail fast so the caller can release the lock and proceed degraded.
+// A non-positive timeout falls back to the long timeout.
+func (c *Client) BdevNvmeAttachControllerWithTimeout(name, subnqn, traddr, trsvcid string, trtype spdktypes.NvmeTransportType, adrfam spdktypes.NvmeAddressFamily,
+	ctrlrLossTimeoutSec, reconnectDelaySec, fastIOFailTimeoutSec int32, multipath string, timeout time.Duration) (bdevNameList []string, err error) {
 	req := spdktypes.BdevNvmeAttachControllerRequest{
 		Name: name,
 		NvmeTransportID: spdktypes.NvmeTransportID{
@@ -990,8 +1023,7 @@ func (c *Client) BdevNvmeAttachController(name, subnqn, traddr, trsvcid string, 
 		Multipath:            multipath,
 	}
 
-	// Long blob recovery time might be needed if the spdk_tgt is not shutdown gracefully.
-	cmdOutput, err := c.jsonCli.SendCommandWithLongTimeout("bdev_nvme_attach_controller", req)
+	cmdOutput, err := c.jsonCli.SendCommandWithTimeout("bdev_nvme_attach_controller", req, timeout)
 	if err != nil {
 		return nil, err
 	}

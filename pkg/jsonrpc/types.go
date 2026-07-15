@@ -29,6 +29,8 @@ type RespErrorCode int32
 const (
 	RespErrorCodeNoEntry              = -2
 	RespErrorCodeNoSuchProcess        = -3
+	RespErrorCodeConnectionTimeout    = -110
+	RespErrorCodeAlreadyExists        = -114
 	RespErrorCodeDeviceOrResourceBusy = -16
 	RespErrorCodeNoFileExists         = -17
 	RespErrorCodeNoSuchDevice         = -19
@@ -99,6 +101,35 @@ func IsJSONRPCRespErrorNoSuchDevice(err error) bool {
 
 	return responseError.Code == RespErrorCodeNoSuchDevice
 }
+
+
+// IsJSONRPCRespErrorConnectionTimeout reports whether err is an SPDK JSON-RPC
+// error with code -110 (ETIMEDOUT). This is returned when an NVMe-oF operation
+// (e.g. bdev_nvme_detach_controller) times out against an unreachable or
+// stalled peer; callers tearing down an already-broken connection can treat it
+// as "the peer is gone" rather than a hard failure.
+func IsJSONRPCRespErrorConnectionTimeout(err error) bool {
+	responseError, ok := err.(*JSONRPCRespError)
+	if !ok {
+		return false
+	}
+
+	return responseError.Code == RespErrorCodeConnectionTimeout
+}
+
+
+// IsJSONRPCRespErrorAlreadyExists reports whether err is an SPDK JSON-RPC
+// error with code -114 (EALREADY). bdev_nvme_attach_controller returns this
+// when the controller is still present from a prior attach.
+func IsJSONRPCRespErrorAlreadyExists(err error) bool {
+	responseError, ok := err.(*JSONRPCRespError)
+	if !ok {
+		return false
+	}
+
+	return responseError.Code == RespErrorCodeAlreadyExists
+}
+
 
 func IsJSONRPCRespErrorDeviceOrResourceBusy(err error) bool {
 	jsonRPCError, ok := err.(JSONClientError)
