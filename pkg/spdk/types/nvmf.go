@@ -32,7 +32,37 @@ func (groupID *NvmfANAGroupID) UnmarshalJSON(data []byte) error {
 }
 
 type NvmfCreateTransportRequest struct {
-	Trtype NvmeTransportType `json:"trtype"`
+	Trtype              NvmeTransportType `json:"trtype"`
+	MaxQueueDepth       uint32            `json:"max_queue_depth,omitempty"`
+	MaxIoQpairsPerCtrlr uint32            `json:"max_io_qpairs_per_ctrlr,omitempty"`
+	InCapsuleDataSize   uint32            `json:"in_capsule_data_size,omitempty"`
+	MaxIoSize           uint32            `json:"max_io_size,omitempty"`
+	IoUnitSize          uint32            `json:"io_unit_size,omitempty"`
+	MaxAqDepth          uint32            `json:"max_aq_depth,omitempty"`
+	NumSharedBuffers    uint32            `json:"num_shared_buffers,omitempty"`
+	// BufCacheSize is deprecated on SPDK v26.05 and shares a decode slot with
+	// IobufSmallCacheSize (a C union) — never set both on one request.
+	BufCacheSize uint32 `json:"buf_cache_size,omitempty"`
+	// IobufSmallCacheSize / IobufLargeCacheSize cap the transport's per-poll-
+	// group iobuf caches (SPDK v26.05+). Without explicit caps the default is
+	// pool_count/(2*poll_groups) PER TRANSPORT, so multi-transport targets
+	// consume the whole pool in caches regardless of its size.
+	IobufSmallCacheSize uint32 `json:"iobuf_small_cache_size,omitempty"`
+	IobufLargeCacheSize uint32 `json:"iobuf_large_cache_size,omitempty"`
+	DifInsertOrStrip    bool              `json:"dif_insert_or_strip,omitempty"`
+	AbortTimeoutSec     uint32            `json:"abort_timeout_sec,omitempty"`
+	AcceptorPollRate    uint32            `json:"acceptor_poll_rate,omitempty"`
+	Zcopy               *bool             `json:"zcopy,omitempty"`
+	AcceptorBacklog     uint32            `json:"acceptor_backlog,omitempty"`
+	NoWrBatching        bool              `json:"no_wr_batching,omitempty"`
+	ControlMsgNum       uint32            `json:"control_msg_num,omitempty"`
+	DisableMappableBar0 bool              `json:"disable_mappable_bar0,omitempty"`
+	SockPriority        uint32            `json:"sock_priority,omitempty"`
+	// RDMA-specific
+	NumCqe         uint32 `json:"num_cqe,omitempty"`
+	MaxSrqDepth    uint32 `json:"max_srq_depth,omitempty"`
+	NoSrq          bool   `json:"no_srq,omitempty"`
+	DataWrPoolSize uint32 `json:"data_wr_pool_size,omitempty"`
 }
 
 type NvmfGetTransportRequest struct {

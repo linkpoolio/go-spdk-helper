@@ -71,6 +71,84 @@ func runJSONRPCRequestTest(t *testing.T, fn func(*Client) error, verify func(t *
 	}
 }
 
+func TestBdevAioCreateNoWaitTriState(t *testing.T) {
+	boolPtr := func(v bool) *bool { return &v }
+
+	testCases := []struct {
+		name string
+		// nowait passed to BdevAioCreate
+		nowait *bool
+		// expectPresent indicates whether the "nowait" key must be on the wire
+		expectPresent bool
+		expectValue   bool
+	}{
+		{"nil omits nowait so SPDK default applies", nil, false, false},
+		{"explicit true is sent", boolPtr(true), true, true},
+		{"explicit false is sent", boolPtr(false), true, false},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			runJSONRPCRequestTest(t,
+				func(cli *Client) error {
+					_, err := cli.BdevAioCreate("/dev/test", "aio0", 4096, tc.nowait)
+					return err
+				},
+				func(t *testing.T, method string, params map[string]interface{}) {
+					t.Helper()
+					if method != "bdev_aio_create" {
+						t.Fatalf("unexpected method %s", method)
+					}
+					value, present := params["nowait"]
+					if present != tc.expectPresent {
+						t.Fatalf("expected nowait present=%v, got present=%v (value %#v)", tc.expectPresent, present, value)
+					}
+					if present {
+						boolValue, ok := value.(bool)
+						if !ok {
+							t.Fatalf("expected nowait to be a bool, got %T", value)
+						}
+						if boolValue != tc.expectValue {
+							t.Fatalf("expected nowait=%v, got %v", tc.expectValue, boolValue)
+						}
+					}
+				},
+				"aio0",
+			)
+		})
+	}
+}
+
+func TestIobufSetOptionsSendsBufsizesInBytes(t *testing.T) {
+	runJSONRPCRequestTest(t,
+		func(cli *Client) error {
+			_, err := cli.IobufSetOptions(16384, 2048, 8192, 135168)
+			return err
+		},
+		func(t *testing.T, method string, params map[string]interface{}) {
+			t.Helper()
+			if method != "iobuf_set_options" {
+				t.Fatalf("unexpected method %s", method)
+			}
+			if params["small_pool_count"] != float64(16384) {
+				t.Fatalf("expected small_pool_count 16384, got %#v", params["small_pool_count"])
+			}
+			if params["large_pool_count"] != float64(2048) {
+				t.Fatalf("expected large_pool_count 2048, got %#v", params["large_pool_count"])
+			}
+			// Bufsizes are bytes and must be passed through verbatim, not
+			// multiplied by 1024.
+			if params["small_bufsize"] != float64(8192) {
+				t.Fatalf("expected small_bufsize 8192, got %#v", params["small_bufsize"])
+			}
+			if params["large_bufsize"] != float64(135168) {
+				t.Fatalf("expected large_bufsize 135168, got %#v", params["large_bufsize"])
+			}
+		},
+		true,
+	)
+}
+
 func TestNvmfSubsystemAddNsUsesDefaultANAGroup(t *testing.T) {
 	runJSONRPCRequestTest(t,
 		func(cli *Client) error {

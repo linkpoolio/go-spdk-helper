@@ -19,7 +19,9 @@ func (c *Client) AddDevice(devicePath, name string, clusterSize uint32) (bdevAio
 		name = filepath.Base(devicePath)
 	}
 
-	if _, err := c.BdevAioCreate(devicePath, name, 4096); err != nil {
+	// nil nowait keeps SPDK's built-in default, matching the previous wire
+	// behavior (the old `false` was dropped by omitempty and never sent).
+	if _, err := c.BdevAioCreate(devicePath, name, 4096, nil); err != nil {
 		return "", "", "", err
 	}
 
