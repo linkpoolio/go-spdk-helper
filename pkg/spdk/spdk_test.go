@@ -110,7 +110,7 @@ func (s *TestSuite) TestSPDKBasic(c *C) {
 		c.Assert(jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err), Equals, true)
 	}
 
-	bdevAioName, lvsName, lvsUUID, err := spdkCli.AddDevice(defaultDevicePath, defaultDeviceName, types.MiB)
+	bdevAioName, lvsName, lvsUUID, err := spdkCli.AddDevice(defaultDevicePath, defaultDeviceName, types.MiB, 0)
 	c.Assert(err, IsNil)
 	defer func() {
 		err := spdkCli.DeleteDevice(bdevAioName, lvsName)
@@ -419,7 +419,7 @@ func (s *TestSuite) TestSPDKClientMultiThread(c *C) {
 	// Do blindly cleanup
 	_ = spdkCli.DeleteDevice(defaultDeviceName, defaultDeviceName)
 
-	bdevAioName, lvsName, lvsUUID, err := spdkCli.AddDevice(defaultDevicePath, defaultDeviceName, types.MiB)
+	bdevAioName, lvsName, lvsUUID, err := spdkCli.AddDevice(defaultDevicePath, defaultDeviceName, types.MiB, 0)
 	c.Assert(err, IsNil)
 	defer func() {
 		err := spdkCli.DeleteDevice(bdevAioName, lvsName)
@@ -509,7 +509,7 @@ func (s *TestSuite) TestSPDKEngineSuspend(c *C) {
 		c.Assert(jsonrpc.IsJSONRPCRespErrorNoSuchDevice(err), Equals, true)
 	}
 
-	bdevAioName, lvsName, lvsUUID, err := spdkCli.AddDevice(defaultDevicePath, defaultDeviceName, types.MiB)
+	bdevAioName, lvsName, lvsUUID, err := spdkCli.AddDevice(defaultDevicePath, defaultDeviceName, types.MiB, 0)
 	c.Assert(err, IsNil)
 	defer func() {
 		err := spdkCli.DeleteDevice(bdevAioName, lvsName)

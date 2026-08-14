@@ -44,6 +44,10 @@ func BdevLvstoreCreateCmd() cli.Command {
 				Usage: "Logical volume store cluster size, by default 1MiB",
 				Value: types.MiB,
 			},
+			cli.UintFlag{
+				Name:  "md-pages-per-cluster-ratio",
+				Usage: "num_md_pages_per_cluster_ratio. 0 omits the field (SPDK default 100).",
+			},
 		},
 		Usage: "create a bdev lvstore based on a block device: \"create --bdev-name <BDEV NAME> --lvs-name <LVSTORE NAME>\"",
 		Action: func(c *cli.Context) {
@@ -60,7 +64,7 @@ func bdevLvstoreCreate(c *cli.Context) error {
 		return err
 	}
 
-	uuid, err := spdkCli.BdevLvolCreateLvstore(c.String("bdev-name"), c.String("lvs-name"), uint32(c.Uint("cluster-size")))
+	uuid, err := spdkCli.BdevLvolCreateLvstore(c.String("bdev-name"), c.String("lvs-name"), uint32(c.Uint("cluster-size")), uint32(c.Uint("md-pages-per-cluster-ratio")))
 	if err != nil {
 		return err
 	}
