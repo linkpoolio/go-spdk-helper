@@ -194,3 +194,49 @@ func TestNvmfSubsystemListenerSetANAStateDefaultsANAGroup(t *testing.T) {
 		true,
 	)
 }
+
+func TestBdevLvolCreateLvstoreRPCRequests(t *testing.T) {
+	t.Run("omits ratio when zero so SPDK keeps its default of 100", func(t *testing.T) {
+		runJSONRPCRequestTest(t,
+			func(cli *Client) error {
+				_, err := cli.BdevLvolCreateLvstore("aio0", "lvs0", 33554432, 0)
+				return err
+			},
+			func(t *testing.T, method string, params map[string]interface{}) {
+				t.Helper()
+				if method != "bdev_lvol_create_lvstore" {
+					t.Fatalf("unexpected method %s", method)
+				}
+				if params["bdev_name"] != "aio0" || params["lvs_name"] != "lvs0" {
+					t.Fatalf("unexpected identity params %#v", params)
+				}
+				if params["cluster_sz"] != float64(33554432) {
+					t.Fatalf("expected cluster_sz 33554432, got %#v", params["cluster_sz"])
+				}
+				if _, ok := params["num_md_pages_per_cluster_ratio"]; ok {
+					t.Fatalf("ratio should be omitted at 0, got %#v", params["num_md_pages_per_cluster_ratio"])
+				}
+			},
+			"uuid-0",
+		)
+	})
+
+	t.Run("sends explicit ratio", func(t *testing.T) {
+		runJSONRPCRequestTest(t,
+			func(cli *Client) error {
+				_, err := cli.BdevLvolCreateLvstore("aio0", "lvs0", 33554432, 400)
+				return err
+			},
+			func(t *testing.T, method string, params map[string]interface{}) {
+				t.Helper()
+				if method != "bdev_lvol_create_lvstore" {
+					t.Fatalf("unexpected method %s", method)
+				}
+				if params["num_md_pages_per_cluster_ratio"] != float64(400) {
+					t.Fatalf("expected ratio 400, got %#v", params["num_md_pages_per_cluster_ratio"])
+				}
+			},
+			"uuid-0",
+		)
+	})
+}

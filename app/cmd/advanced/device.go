@@ -32,6 +32,10 @@ func DeviceAddCmd() cli.Command {
 				Usage: "Logical volume store cluster size, by default 1MiB",
 				Value: types.MiB,
 			},
+			cli.UintFlag{
+				Name:  "md-pages-per-cluster-ratio",
+				Usage: "num_md_pages_per_cluster_ratio. 0 omits the field (SPDK default 100).",
+			},
 		},
 		Action: func(c *cli.Context) {
 			if err := deviceAdd(c); err != nil {
@@ -49,7 +53,7 @@ func deviceAdd(c *cli.Context) error {
 		return err
 	}
 
-	bdevAioName, lvsName, lvsUUID, err := spdkCli.AddDevice(devicePath, "", uint32(c.Uint("cluster-size")))
+	bdevAioName, lvsName, lvsUUID, err := spdkCli.AddDevice(devicePath, "", uint32(c.Uint("cluster-size")), uint32(c.Uint("md-pages-per-cluster-ratio")))
 	if err != nil {
 		return err
 	}
