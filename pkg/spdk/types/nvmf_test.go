@@ -2,6 +2,7 @@ package types
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -70,5 +71,31 @@ func TestNvmfSubsystemNamespaceBackwardCompatible(t *testing.T) {
 	s := ns.Anagrpid
 	if s != "1" {
 		t.Fatalf("expected %q, got %q", "1", s)
+	}
+}
+
+func TestNvmfCreateTransportTosJSON(t *testing.T) {
+	untagged, err := json.Marshal(NvmfCreateTransportRequest{Trtype: NvmeTransportTypeRDMA})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(untagged), `"tos"`) {
+		t.Fatalf("tos 0 must be omitted (rdma-core default), got %s", untagged)
+	}
+
+	tagged, err := json.Marshal(NvmfCreateTransportRequest{Trtype: NvmeTransportTypeRDMA, Tos: 96})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(tagged), `"tos":96`) {
+		t.Fatalf("tos 96 must be on the wire, got %s", tagged)
+	}
+
+	var got NvmfTransport
+	if err := json.Unmarshal([]byte(`{"trtype":"RDMA","tos":96}`), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Tos != 96 {
+		t.Fatalf("expected tos 96, got %d", got.Tos)
 	}
 }
